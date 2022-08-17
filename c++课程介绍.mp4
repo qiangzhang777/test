@@ -1,0 +1,370 @@
+# !/usr/bin python3
+# -*- encoding:utf-8 -*-
+# @Author : Samzhang
+# @File : zhangting.py
+# @Time : 2022/8/15 0:03
+import requests as req
+import httpx
+import asyncio
+import re
+import pandas as pd
+import time
+import tushare as ts
+import pymongo as pm
+from multiprocessing import Process
+from multiprocessing import Queue
+import pyautogui as pg
+from selenium import webdriver
+import tkinter as tk
+import math
+import random
+import os
+import datetime
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.options import Options
+from proxy_url import Proxy_url
+from logger import *
+import threading as thr
+from auto_login import *
+import json
+import talib
+import numpy
+from multiprocessing import Pool
+
+
+class zhangting():
+    def __init__(self, code, data, today):
+        self.today = today
+        self.data = data
+        self.code = code
+
+        # 连接mongoDB
+        self.myclient = pm.MongoClient("mongodb://localhost:27017/")
+        self.fd = self.myclient["freedom"]
+
+        # 设置ip池
+        self.ipPool = self.fd['ipPool']
+        self.allIpPool = self.fd['allIpPool']
+
+    def run(self):
+        start_jk = 0
+        plst = []
+        zt_point = 0
+        k_df = pd.DataFrame()
+        k30 = 30
+        k60 = 60
+        k90 = 90
+        k120 = 120
+        k150 = 150
+        k180 = 180
+        k210 = 210
+        k240 = 240
+        for info in self.data.itertuples():
+            # 1:时间
+            # 2:最新价
+            # 3:成交手数
+            # 4：成交金额
+            # 5：买1价，6：买2价,7：买3价,8：买4价,9：买5价
+            # 10：卖1价,11：卖2价,12：卖3价,13：卖4价,14：卖5价
+            # 15：买1量,16：买2量,17：买3量,18：买4量,19：买5量
+            # 20：卖1量,21：卖2量,22：卖3量,23：卖4量,24：卖5量
+
+            per = {}
+            plst.append(info[2])
+            # print(plst)
+            if len(plst) <= k30:
+                k30_xl = round((plst[-1] - plst[0]) / len(plst), 3)
+            else:
+                k30_xl = round((plst[-1] - plst[int(1 - k30)]) / k30, 3)
+
+            if len(plst) <= k60:
+                k60_xl = round((plst[-1] - plst[0]) / len(plst), 3)
+            else:
+                k60_xl = round((plst[-1] - plst[int(1 - k60)]) / k60, 3)
+
+            if len(plst) <= k90:
+                k90_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k90_xl = round((plst[-1] - plst[int(1 - k90)]) / k90, 3)
+
+            if len(plst) <= k120:
+                k120_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k120_xl = round((plst[-1] - plst[int(1 - k120)]) / k120, 3)
+
+            if len(plst) <= k150:
+                k150_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k150_xl = round((plst[-1] - plst[int(1 - k150)]) / k150, 3)
+
+            if len(plst) <= k180:
+                k180_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k180_xl = round((plst[-1] - plst[int(1 - k180)]) / k180, 3)
+
+            if len(plst) <= k210:
+                k210_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k210_xl = round((plst[-1] - plst[int(1 - k210)]) / k210, 3)
+
+            if len(plst) <= k240:
+                k240_xl = round((plst[-1] - plst[0]) / len(plst), 2)
+            else:
+                k240_xl = round((plst[-1] - plst[int(1 - k240)]) / k240, 3)
+
+            if k30_xl > 0.6 and k60_xl > 0.6 and k90_xl > 0.6:
+                start_jk = 1
+
+            if start_jk:
+                zt_point = self.getWeituo(zt_point, info)
+
+            per = {'date': self.today, 'time': info[1], 'k30': k30_xl, 'k60': k60_xl, 'k90': k90_xl, 'k120': k120_xl, 'k150': k150_xl, 'k180': k180_xl, 'k210': k210_xl, 'k240': k240_xl, 'start_jk': start_jk, 'zt_point': zt_point}
+            k_df = k_df.append(per, ignore_index=True)
+            # print(self.code, per)
+        k_df.to_excel(f"E:\\a5data\\2021\\{self.today[0:4]}{self.today[5:7]}{self.today[8:10]}\\{self.code}.xlsx")
+
+    # 修改代码类型
+    def chg_code_type(self, code):
+        if code[7:9] == 'SZ':
+            code = 'sz' + code[0:6]
+        elif code[7:9] == 'SH':
+            code = 'sh' + code[0:6]
+        elif code[0:3] == '000' or code[0:3] == '002' or code[0] == '1':
+            code = 'sz' + code[0:6]
+        elif code[0] == '6' or code[0] == '5':
+            code = 'sh' + code[0:6]
+        return code
+
+    def getReadList(self):
+
+        j = 0
+        pool = {}
+        appear_count = {}
+        pool_res = []
+        while True:
+            time.sleep(0.5)
+            curr_time = datetime.datetime.now()
+            if curr_time.hour >= 9 and curr_time.hour <= 14:
+
+                if (curr_time.hour == 11 and curr_time.minute > 30) or curr_time.hour == 12:
+                    continue
+                elif (curr_time.hour == 9 and curr_time.minute >= 30) or curr_time.hour >= 10:
+                    try:
+                        curr_time = datetime.datetime.now()
+                        # 获取上涨的股票
+                        num = 500
+                        url = f"http://83.push2.eastmoney.com/api/qt/clist/get?cb=jQuery112403218218437854964_1660569515549&pn=1&pz={num}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&wbp2u=4914084885250390|0|0|0|web&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3,f5,f6,f11,f12,f14,f22&_=1660569515717"
+                        res = Proxy_url.urlget(url)
+                        try:
+                            res = re.search(r"\[(.*)\]", res.text)
+                            # res = json.loads(f'[{res.groups()[0]}]')
+                            # res = json.loads(f'[{res.groups()[0]}]')
+                            # print(type(res[0]))
+                            # print(res)
+                            self.fd['zhangting_basic' + self.today].insert_one({'t': j, 'curr_time': curr_time, 'res': f'[{res.groups()[0]}]'})
+                        except Exception as e:
+                            raise e
+                        j = j + 1
+                    except Exception as e:
+                        print('getReadList错误编号1', e)
+                    else:
+                        res = json.loads(f'[{res.groups()[0]}]')
+                        k30 = 40
+                        pool_k30 = {}
+                        # k60 = 120
+                        # pool_k60 = {}
+                        # k90 = 180
+                        # pool_k90 = {}
+                        for r in res:
+                            if r['f12'][0:3] == '688' or r['f12'][0] in ['4', '3', '8']:
+                                continue
+                            if r['f3'] >= 10 or r['f3'] <= 2:
+                                continue
+                            if r['f12'] not in pool.keys():
+                                pool[r['f12']] = [r['f3']]
+                            else:
+                                pool[r['f12']].append(r['f3'])
+                            if len(pool[r['f12']]) <= k30:
+                                pool_k30[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0]) / len(pool[r['f12']]), 2)
+                            else:
+                                pool_k30[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k30]) / k30, 3)
+
+                            # if len(pool[r['f12']]) <= k60:  #     pool_k60[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0])/len(pool[r['f12']]), 2)  # else:  #     pool_k60[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k60])/k60, 3)  #  # if len(pool[r['f12']]) <= k90:  #     pool_k90[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0])/len(pool[r['f12']]), 2)  # else:  #     pool_k90[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k90])/k90, 3)
+
+                        # print(pool_k30.items())
+                        k_sort30 = sorted(pool_k30.items(), key=lambda x: x[1], reverse=True)
+                        if k_sort30[0][0] not in pool_res:
+                            pool_res.append(k_sort30[0][0])
+                        if k_sort30[1][0] not in pool_res:
+                            pool_res.append(k_sort30[1][0])
+                        if k_sort30[2][0] not in pool_res:
+                            pool_res.append(k_sort30[2][0])
+                        print(len(pool_res))
+                        print(pool_res)
+                        pool_res = [self.chg_code_type(c) for c in pool_res]
+                        try:
+                            lastreq = {}
+                            all_list_2str = ','.join(pool_res)
+                            url = "https://qt.gtimg.cn/q=" + all_list_2str + "&r=926277345"
+
+                            try:
+                                res = Proxy_url.urlget(url)
+                            except Exception as e:
+                                self.logger.error(e)  # raise e
+                            else:
+                                res = re.split(";", res.text)
+                                ser = pd.Series()
+                                # 移除尾巴上的/n
+                                res.pop()
+                                for r in res:
+                                    info = re.split('~', r)
+                                    # 修改etf代码号，前面加上sz或者sh
+                                    if 'sh' + str(info[2]) in pool_res:
+                                        info[2] = 'sh' + str(info[2])
+                                    elif 'sz' + str(info[2]) in pool_res:
+                                        info[2] = 'sz' + str(info[2])
+
+                                    # 存入当次访问的基础info数据
+                                    lastreq[info[2]] = info
+                                    # 存入个股实时价格，并在后面对比最低价格
+                                    ser[info[2]] = float(info[3])
+                                    self.getWeituo(info)
+                        except Exception as e:
+                            print(e)
+
+    def getWeituo(self, zt_point, info):
+        try:
+            # 1:时间
+            # 2:最新价
+            # 3:成交手数
+            # 4：成交金额
+            # 5：买1价，6：买2价,7：买3价,8：买4价,9：买5价
+            # 10：卖1价,11：卖2价,12：卖3价,13：卖4价,14：卖5价
+            # 15：买1量,16：买2量,17：买3量,18：买4量,19：买5量
+            # 20：卖1量,21：卖2量,22：卖3量,23：卖4量,24：卖5量
+            # ndict = {'code': info[2]}
+            # ndict['time'] = str(datetime.datetime.now())
+            # ndict['pct_chg'] = float(info[32])
+            # ndict['price'] = float(info[3])
+            # ndict['todayHigh'] = float(info[33])
+            # ndict['isHigh'] = (ndict['todayHigh'] - ndict['price']) / (ndict['todayHigh'] + ndict['price'])
+            # # 委比
+            # b = info[9:19]
+            # s = info[19:29]
+            blist = [int(info[15]), int(info[16]), int(info[17]), int(info[18]), int(info[19])]
+            slist = [int(info[20]), int(info[21]), int(info[22]), int(info[23]), int(info[24])]
+            sum_buy = sum(blist)
+            sum_sale = sum(slist)
+
+            if slist[4] == 0 and slist[3] == 0 and slist[1] != 0 and slist[0] != 0:
+                zt_point = 1
+
+            if sum_sale == 0:
+                zt_point = 0
+
+            return zt_point
+
+        except Exception as e:
+            raise e
+
+    def find_plane(self):
+        data = self.fd['zhangting_basic' + self.today].find()
+        df = pd.DataFrame(columns=['code', 'curr_price', 'pct'])
+        pool = {}
+        appear_count = {}
+        pool_res = []
+        for d in data:
+            # print(d['t'], d['curr_time'])
+            res = json.loads(d['res'])
+            k30 = 40
+            pool_k30 = {}
+            # k60 = 120
+            # pool_k60 = {}
+            # k90 = 180
+            # pool_k90 = {}
+            for r in res:
+                if r['f12'][0:3] == '688' or r['f12'][0] in ['4', '3', '8']:
+                    continue
+                if r['f3'] >= 10 or r['f3'] <= 2:
+                    continue
+                if r['f12'] not in pool.keys():
+                    pool[r['f12']] = [r['f3']]
+                else:
+                    pool[r['f12']].append(r['f3'])
+                if len(pool[r['f12']]) <= k30:
+                    pool_k30[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0]) / len(pool[r['f12']]), 2)
+                else:
+                    pool_k30[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k30]) / k30, 3)
+
+                # if len(pool[r['f12']]) <= k60:  #     pool_k60[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0])/len(pool[r['f12']]), 2)  # else:  #     pool_k60[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k60])/k60, 3)  #  # if len(pool[r['f12']]) <= k90:  #     pool_k90[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][0])/len(pool[r['f12']]), 2)  # else:  #     pool_k90[r['f12']] = round((pool[r['f12']][-1] - pool[r['f12']][-k90])/k90, 3)
+
+            # print(pool_k30.items())
+            k_sort30 = sorted(pool_k30.items(), key=lambda x: x[1], reverse=True)
+            if k_sort30[0][0] not in pool_res:
+                pool_res.append(k_sort30[0][0])
+            if k_sort30[1][0] not in pool_res:
+                pool_res.append(k_sort30[1][0])
+            if k_sort30[2][0] not in pool_res:
+                pool_res.append(k_sort30[2][0])
+        print(len(pool_res))
+        print(pool_res)
+
+def run_zt(trade_date_list):
+
+    for index, today in enumerate(trade_date_list[0:]):
+        for root,dirs,file_lst in os.walk(f"E:\\a5data\\2021\\{today[0:4]}{today[5:7]}{today[8:10]}"):
+            for file in file_lst:
+                if file[-1] == 't' or  file[-1] == 'T' and file[0:3] not in ['688', '300']:
+
+                    file_path = root+"\\"+file
+                    file_xlsx = root+"\\"+file[0:6]+'.xlsx'
+                    if os.path.exists(file_xlsx):
+                        continue
+                    data = pd.read_csv(file_path, header=None)
+                    print(index, today, file)
+
+                    zt = zhangting(file[0:6], data, today)
+                    zt.run()
+
+
+if __name__ == '__main__':
+
+    trade_date = {1: ['2021-01-04', '2021-01-05', '2021-01-06', '2021-01-07', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13', '2021-01-14', '2021-01-15', '2021-01-18', '2021-01-19', '2021-01-20', '2021-01-21', '2021-01-22', '2021-01-25', '2021-01-26', '2021-01-27', '2021-01-28', '2021-01-29'],
+        2: ['2021-02-01', '2021-02-02', '2021-02-03', '2021-02-04', '2021-02-05', '2021-02-08', '2021-02-09', '2021-02-10', '2021-02-18', '2021-02-19', '2021-02-22', '2021-02-23', '2021-02-24', '2021-02-25', '2021-02-26'],
+        3: ['2021-03-01', '2021-03-02', '2021-03-03', '2021-03-04', '2021-03-05', '2021-03-08', '2021-03-09', '2021-03-10', '2021-03-11', '2021-03-12', '2021-03-15', '2021-03-16', '2021-03-17', '2021-03-18', '2021-03-19', '2021-03-22', '2021-03-23', '2021-03-24', '2021-03-25', '2021-03-26', '2021-03-29', '2021-03-30', '2021-03-31'],
+        4: ['2021-04-01', '2021-04-02', '2021-04-06', '2021-04-07', '2021-04-08', '2021-04-09', '2021-04-12', '2021-04-13', '2021-04-14', '2021-04-15', '2021-04-16', '2021-04-19', '2021-04-20', '2021-04-21', '2021-04-22', '2021-04-23', '2021-04-26', '2021-04-27', '2021-04-28', '2021-04-29', '2021-04-30'],
+        5: ['2021-05-06', '2021-05-07', '2021-05-10', '2021-05-11', '2021-05-12', '2021-05-13', '2021-05-14', '2021-05-17', '2021-05-18', '2021-05-19', '2021-05-20', '2021-05-21', '2021-05-24', '2021-05-25', '2021-05-26', '2021-05-27', '2021-05-28', '2021-05-31'],
+        6: ['2021-06-01', '2021-06-02', '2021-06-03', '2021-06-04', '2021-06-07', '2021-06-08', '2021-06-09', '2021-06-10', '2021-06-11', '2021-06-15', '2021-06-16', '2021-06-17', '2021-06-18', '2021-06-21', '2021-06-22', '2021-06-23', '2021-06-24', '2021-06-25', '2021-06-28', '2021-06-29', '2021-06-30'],
+        7: ['2021-07-01', '2021-07-02', '2021-07-05', '2021-07-06', '2021-07-07', '2021-07-08', '2021-07-09', '2021-07-12', '2021-07-13', '2021-07-14', '2021-07-15', '2021-07-16', '2021-07-19', '2021-07-20', '2021-07-21', '2021-07-22', '2021-07-23', '2021-07-26', '2021-07-27', '2021-07-28', '2021-07-29', '2021-07-30'],
+        8: ['2021-08-02', '2021-08-03', '2021-08-04', '2021-08-05', '2021-08-06', '2021-08-09', '2021-08-10', '2021-08-11', '2021-08-12', '2021-08-13', '2021-08-16', '2021-08-17', '2021-08-18', '2021-08-19', '2021-08-20', '2021-08-23', '2021-08-24', '2021-08-25', '2021-08-26', '2021-08-27', '2021-08-30', '2021-08-31'],
+        9: ['2021-09-01', '2021-09-02', '2021-09-03', '2021-09-06', '2021-09-07', '2021-09-08', '2021-09-09', '2021-09-10', '2021-09-13', '2021-09-14', '2021-09-15', '2021-09-16', '2021-09-17', '2021-09-22', '2021-09-23', '2021-09-24', '2021-09-27', '2021-09-28', '2021-09-29', '2021-09-30'],
+        10: ['2021-10-08', '2021-10-11', '2021-10-12', '2021-10-13', '2021-10-14', '2021-10-15', '2021-10-18', '2021-10-19', '2021-10-20', '2021-10-21', '2021-10-22', '2021-10-25', '2021-10-26', '2021-10-27', '2021-10-28', '2021-10-29'],
+        11: ['2021-11-01', '2021-11-02', '2021-11-03', '2021-11-04', '2021-11-05', '2021-11-08', '2021-11-09', '2021-11-10', '2021-11-11', '2021-11-12', '2021-11-15', '2021-11-16', '2021-11-17', '2021-11-18', '2021-11-19', '2021-11-22', '2021-11-23', '2021-11-24', '2021-11-25', '2021-11-26', '2021-11-29', '2021-11-30'],
+        12: ['2021-12-01', '2021-12-02', '2021-12-03', '2021-12-06', '2021-12-07', '2021-12-08', '2021-12-09', '2021-12-10', '2021-12-13', '2021-12-14', '2021-12-15', '2021-12-16', '2021-12-17', '2021-12-20', '2021-12-21', '2021-12-22', '2021-12-23', '2021-12-24', '2021-12-27', '2021-12-28', '2021-12-29', '2021-12-30', '2021-12-31']}
+
+    trade_date_list = []
+    plst = {}
+    for t in range(1, 13):
+        # trade_date_list += trade_date[t]
+        plst[t] = Process(target=run_zt, args=(trade_date[t],))
+
+    for t in range(1, 13):
+        plst[t].start()
+    for t in range(1, 13):
+        plst[t].join()
+
+    # for index, today in enumerate(trade_date_list[0:]):
+    #     for root,dirs,file_lst in os.walk(f"E:\\a5data\\2021\\{today[0:4]}{today[5:7]}{today[8:10]}"):
+    #         for file in file_lst:
+    #             if file[-1] == 't' or  file[-1] == 'T' and file[0:3] not in ['688', '300']:
+    #
+    #                 file_path = root+"\\"+file
+    #                 data = pd.read_csv(file_path, header=None)
+    #                 print(index, today, file)
+    #
+    #                 zt = zhangting(file[0:6], data, today)
+    #                 zt.run()
+    #
+
